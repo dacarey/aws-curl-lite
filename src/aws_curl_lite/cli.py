@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 import argparse
 import sys
+import json  # added for pretty printing JSON
 
 import boto3
 from botocore.awsrequest import AWSRequest
 from botocore.auth import SigV4Auth
+from botocore.exceptions import TokenRetrievalError
 import requests
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -21,6 +24,11 @@ def main():
         required=True,
         help="URL of the AWS API Gateway REST API or Lambda function URL",
     )
+    parser.add_argument(
+        "--raw",
+        action="store_true",
+        help="Output raw response body without pretty print",
+    )
     args = parser.parse_args()
 
     # Create a boto3 session using the specified profile
@@ -29,7 +37,13 @@ def main():
     if credentials is None:
         print(f"Could not load AWS credentials for profile '{args.profile}'.")
         sys.exit(1)
-    frozen_creds = credentials.get_frozen_credentials()
+    
+    try:
+        frozen_creds = credentials.get_frozen_credentials()
+    except TokenRetrievalError:
+        print(f"AWS SSO session has expired or is not available for profile '{args.profile}'.")
+        print(f"Please run: aws sso login --profile {args.profile}")
+        sys.exit(1)
 
     # Retrieve region from the session; this must be set in your profile/config
     region = session.region_name
@@ -42,7 +56,7 @@ def main():
 
     # Create an AWSRequest for a GET call
     aws_request = AWSRequest(method="GET", url=args.location)
-    
+
     # Sign the request with SigV4Auth using the frozen credentials
     SigV4Auth(frozen_creds, service, region).add_auth(aws_request)
 
@@ -53,7 +67,16 @@ def main():
     response = requests.get(args.location, headers=headers)
     print("Status Code:", response.status_code)
     print("Response Body:")
-    print(response.text)
+    content_type = response.headers.get("Content-Type", "").lower()
+    if not args.raw and "application/json" in content_type:
+        try:
+            parsed = response.json()
+            print(json.dumps(parsed, indent=4))
+        except ValueError:
+            print(response.text)
+    else:
+        print(response.text)
+
 
 if __name__ == "__main__":
     main()
